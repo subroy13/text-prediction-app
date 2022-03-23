@@ -1,0 +1,245 @@
+---
+title: "Data Science Capstone - Week 2 Report"
+author: "Subhrajyoty Roy"
+date: "16 October 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment = "", cache = TRUE)
+```
+
+# Introduction
+
+  This is the report for Week 2 of the Data Science Capstone Project. This capstone project focuses on building a text based prediction algorithm using different statistical and machine learning tools. The goal of this report is to download the data, and visualize the data in order to perform some exploratory analysis, which will give us a better insight of the corpus.
+  
+# Loading Required Packages
+
+```{r message=FALSE, warning=FALSE}
+library(utils)
+library(stringi)
+library(ngram)
+```
+  
+  
+# Downloading the Corpus
+
+  The corpus is available in the following url: https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip
+  We use R to download and unzip the corpus text files for us.
+  
+```{r eval=FALSE}
+url <- 'https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip'
+if (!file.exists('Coursera-SwiftKey.zip')){
+  # if the file does not exist, then we download it
+  download.file(url, destfile = "Coursera-SwiftKey.zip", method = "curl")
+}
+
+unzip('Coursera-SwiftKey.zip', exdir = ".")
+```
+
+  The three datasets are extracted into *final/en-US/* folder within the current working directory.
+  
+# Basic Summaries in Corpus
+
+  Now that we have our corpus downloaded and extracted, we should check some basic summaries like sizes of the corpus text files, number of sentences etc.
+
+```{r warning=FALSE}
+CorpusNames <- c('en_US.blogs', 'en_US.news', 'en_US.twitter')
+sizes <- numeric(3)
+sizes[1] <- file.info('final/en_US/en_US.blogs.txt')$size/(2^20) #so that it shows in mb
+sizes[2] <- file.info('final/en_US/en_US.news.txt')$size/(2^20)
+sizes[3] <- file.info('final/en_US/en_US.twitter.txt')$size/(2^20)
+
+# Read blogs data
+con <- file('./final/en_US/en_US.blogs.txt')
+blogdata <- readLines(con); close(con)
+
+# Read news data
+con <- file('./final/en_US/en_US.news.txt')
+newsdata <- readLines(con); close(con)
+
+# Read twitter data
+con <- file('./final/en_US/en_US.twitter.txt'); 
+twitterdata <- readLines(con); close(con)
+
+lengths <- sapply(list(blogdata, newsdata, twitterdata), length)
+Chars <- sapply(list(blogdata, newsdata, twitterdata), function(x){sum(nchar(x))})
+Sentences <- sapply(list(blogdata, newsdata, twitterdata), function(x){sum(stri_count_boundaries(x,type = "sentence"))})
+Words <- sapply(list(blogdata, newsdata, twitterdata), function(x){sum(stri_count_words(x))})
+
+knitr::kable(data.frame(Corpus = CorpusNames, SizeinMB = sizes, Length = lengths, NumberofSenteces = Sentences, NumberofWords = Words, NumberofCharacters = Chars))
+```
+
+# Sampling the Dataset
+
+  Since, the corpus is large in size, so we select 5% texts from each of the three files, and merge them together to form a corpus of reasonable size, using which we can perform related analysis and development of the text prediction system.
+  
+```{r}
+set.seed(19102018)  #set a seed for reproducbility
+blogsamples <- blogdata[sample(length(blogdata), size = (0.05*length(blogdata)), replace = FALSE)]  #sample the blog data
+newssamples <- newsdata[sample(length(newsdata), size = (0.05*length(newsdata)), replace = FALSE)]  #sample the news data
+twittersamples <- twitterdata[sample(length(twitterdata), size = (0.05*length(twitterdata)), replace = FALSE)]  #sample the twitter data
+
+rm(blogdata)
+rm(newsdata)
+rm(twitterdata)  #remove the original data as they would not be required again
+```
+
+  Now that we have sampled our texts, we need to merge these three samples together to form our corpus.
+  
+```{r}
+corpus <- c(blogsamples, newssamples, twittersamples) #make the corpus
+
+#now individual samples can be removed
+rm(blogsamples)
+rm(newssamples)
+rm(twittersamples)
+```
+
+# Cleaning the Corpus
+
+  To clean the text, we shall first make every text to lowercase letters so that no ambiguity arises in case of other transformations. We should be concerned with the following steps in order to clean the data.
+  
+1. Remove optional spaces between different words.
+2. Perform a profanity filtering. For this, we shall use the words banned by Google for profanity filtering. The list of words are [here](https://raw.githubusercontent.com/RobertJGabriel/Google-profanity-words/master/list.txt)
+3. Remove any URL occuring in the text.
+4. Remove any appearance of abbreviations.
+5. Remove any appearance of punctuation marks.
+6. Remove any repeated words.
+7. Remove any appearance of digits.
+8. Remove any NonASCII character.
+
+```{r message=FALSE}
+url <- 'https://raw.githubusercontent.com/RobertJGabriel/Google-profanity-words/master/list.txt'  #download the profanity corpus
+if (!file.exists('bad-words.txt')){
+  # if the file does not exist, then we download it
+  download.file(url, destfile = "bad-words.txt", method = "curl")
+}
+con <- file('./bad-words.txt')
+badwords <- readLines(con); close(con)
+
+corpus <- iconv(corpus, "latin1", "ASCII", sub="")  #remove nonASCII characters
+corpus <- gsub("\\s+"," ",corpus) ## Removing optional space
+corpus <- tolower(corpus)  ## lowercasing the letters
+for (badword in badwords){
+  corpus <- gsub(paste0("\\s",badword,"\\s"), "", corpus)
+  message(badword)  #just for checking
+} #remove all bad words that appears
+corpus <- gsub("http[[:alnum:]]*","",corpus) #remove any URL
+corpus <- gsub("([a-z]\\.){2,}","", corpus) #remove any abbreviations
+corpus <- gsub("[[:digit:]]","", corpus)  #remove any digits
+corpus <- gsub("(\\w+\\s)\\1+","\\1", corpus)  #remove the repeated word
+corpus <- gsub("[[:punct:]]", "", corpus) #remove any punctuation marks
+```
+
+  Now that our corpus is cleaned, we save it in a text file for future references.
+  
+```{r}
+con <- file('./cleaned-corpus.txt')
+writeLines(corpus, con); close(con)
+```
+
+# Building ist of frequent N-Grams in the Corpus
+
+  We compute the list of the most frequent N-Grams in the corpus. This will serve as a basis for the text based prediction model. For this purpose, we are using *ngram* library which performs fast n-gram tokenization. We present the top 10 frequent n-grams for n=1,2,3,4 and 5 and visualize the corresponding bar diagram.
+  
+  Now, there might be some sentences remaining which has less than 3 words. These sentences clearly would not provide a good corpus for text prediction using n-grams. 
+  
+```{r}
+nwords <- stri_count_words(corpus)  #count the number of words
+print(sum(nwords < 3)/length(nwords))
+```
+  
+  We see that this makes us to remove about 3% of the corpus.
+
+```{r}
+corpus <- corpus[nwords>=3]  #keep those corpus texts where there are at least 3 words.
+```
+  
+  
+## 1-Gram or Words
+  
+```{r}
+ng <- ngram(corpus, n=1)  #get the one_grams
+ng_table <- head(get.phrasetable(ng), 10) #get top 10 entries
+knitr::kable(ng_table)
+barplot(ng_table$freq, names.arg = ng_table$ngrams, las = 2, ylab = "Frequency", main = "Bar Diagram of Word frequency in the Corpus")
+```
+  
+  
+## 2-Gram or Bigrams
+  
+```{r}
+ng <- ngram(corpus, n=2)  #get the bi_grams
+ng_table <- head(get.phrasetable(ng), 10) #get top 10 entries
+knitr::kable(ng_table)
+barplot(ng_table$freq, names.arg = ng_table$ngrams, las = 2, ylab = "Frequency", main = "Bar Diagram of Bigram frequency in the Corpus")
+```
+  
+## 3-Gram or Trigrams
+  
+```{r}
+ng <- ngram(corpus, n=3)  #get the tri_grams
+ng_table <- head(get.phrasetable(ng), 10) #get top 10 entries
+knitr::kable(ng_table)
+barplot(ng_table$freq, names.arg = ng_table$ngrams, las = 2, ylab = "Frequency", main = "Bar Diagram of Trigram frequency in the Corpus")
+```
+     
+## 4-gram or Tetragrams
+
+```{r}
+nwords <- stri_count_words(corpus)
+ng <- ngram(corpus[nwords>=4], n=4)  #get the tri_grams
+ng_table <- head(get.phrasetable(ng), 10) #get top 10 entries
+knitr::kable(ng_table)
+barplot(ng_table$freq, names.arg = ng_table$ngrams, las = 2, ylab = "Frequency", main = "Bar Diagram of Tetragram frequency in the Corpus")
+```
+  
+  
+## 5-gram or Pentagrams
+
+```{r}
+ng <- ngram(corpus[nwords>=5], n=5)  #get the tri_grams
+ng_table <- head(get.phrasetable(ng), 10) #get top 10 entries
+knitr::kable(ng_table)
+barplot(ng_table$freq, names.arg = ng_table$ngrams, las = 2, ylab = "Frequency", main = "Bar Diagram of Pentagram frequency in the Corpus")
+```
+  
+    
+# Goals for Text Prediction Application
+
+1. Using a basic 5-gram model to predict the next word based on the previous three words. Including 2-gram, 3-gram and 4-gram models at the initial level.
+2. Create larger corpus sizes in order to assess better accuracy.
+3. Include prediction of punctuation marks along with the word.
+4. Store the n-gram objects efficiently to be used on light-weight devices.
+5. Optimize the running time of the prediction algorithm and locate the bottlenecks of the code for efficiency in speed.
+
+<br style="line-height:150px"/>
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+
+
+
+
+
+
+
+
+
+
+
